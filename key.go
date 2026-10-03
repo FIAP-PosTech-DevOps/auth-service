@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	//"fmt"
 )
+
+// apiKeyPrefix facilita identificar a chave em logs e varreduras de segredo.
+const apiKeyPrefix = "tm_key_"
 
 // generateAPIKey cria uma string aleatória segura de 32 bytes
 func generateAPIKey() (string, error) {
@@ -13,8 +15,7 @@ func generateAPIKey() (string, error) {
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	// Prefixo para facilitar a identificação da chave
-	return "tm_key_" + hex.EncodeToString(bytes), nil
+	return apiKeyPrefix + hex.EncodeToString(bytes), nil
 }
 
 // hashAPIKey calcula o hash SHA-256 de uma chave para armazenamento seguro
