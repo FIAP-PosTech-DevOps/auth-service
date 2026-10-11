@@ -2,19 +2,19 @@ package main
 
 import (
 	"database/sql"
-	//"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/joho/godotenv"
 )
 
-// App struct (para injeção de dependência)
+// App agrupa as dependências dos handlers (injeção de dependência).
 type App struct {
-	DB         *sql.DB
-	MasterKey  string
+	DB        *sql.DB
+	MasterKey string
 }
 
 func main() {
@@ -42,28 +42,42 @@ func main() {
 	if err != nil {
 		log.Fatalf("Não foi possível conectar ao banco de dados: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	app := &App{
-		DB:         db,
-		MasterKey:  masterKey,
+		DB:        db,
+		MasterKey: masterKey,
 	}
 
-	// --- Rotas da API ---
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", app.healthHandler)
-
-	// Endpoint público para validar uma chave
-	mux.HandleFunc("/validate", app.validateKeyHandler)
-
-	// Endpoints de "admin" para criar/gerenciar chaves
-	// Eles são protegidos pelo middleware de autenticação
-	mux.Handle("/admin/keys", app.masterKeyAuthMiddleware(http.HandlerFunc(app.createKeyHandler)))
+	server := &http.Server{
+		Addr:    ":" + port,
+		Handler: app.routes(),
+		// Timeouts explícitos: sem eles um cliente lento (ou malicioso) prende
+		// a conexão indefinidamente (ataque do tipo Slowloris).
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	log.Printf("Serviço de Autenticação (Go) rodando na porta %s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// routes registra as rotas da API. Fica separado do main para os testes
+// exercitarem o roteamento real sem subir servidor nem banco.
+func (a *App) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", a.healthHandler)
+
+	// Endpoint público para validar uma chave
+	mux.HandleFunc("/validate", a.validateKeyHandler)
+
+	// Endpoint de "admin" para criar chaves, protegido pela MASTER_KEY
+	mux.Handle("/admin/keys", a.masterKeyAuthMiddleware(http.HandlerFunc(a.createKeyHandler)))
+	return mux
 }
 
 // connectDB inicializa e testa a conexão com o PostgreSQL

@@ -1,38 +1,48 @@
 package main
 
 import (
-	//"crypto/sha256"
-	//"encoding/hex"
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
 )
 
-// Estrutura para o corpo da requisição de criação de chave
+// CreateKeyRequest é o corpo da requisição de criação de chave.
 type CreateKeyRequest struct {
 	Name string `json:"name"`
 }
 
-// Estrutura para a resposta da criação de chave
+// CreateKeyResponse é a resposta da criação de chave.
 type CreateKeyResponse struct {
 	Name    string `json:"name"`
 	Key     string `json:"key"` // A chave em texto plano é retornada APENAS uma vez
 	Message string `json:"message"`
 }
 
+// writeJSON serializa a resposta e registra no log se a escrita falhar
+// (ex.: cliente desconectou no meio da resposta).
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		log.Printf("Erro ao escrever a resposta: %v", err)
+	}
+}
+
+// bearerToken extrai a chave do header "Authorization: Bearer <chave>".
+func bearerToken(r *http.Request) string {
+	return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+}
+
 // healthHandler é um simples endpoint de verificação de saúde
-func (a *App) healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+func (a *App) healthHandler(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // validateKeyHandler verifica se uma chave de API (enviada via Header) é válida
 func (a *App) validateKeyHandler(w http.ResponseWriter, r *http.Request) {
-	// Extrai a chave do header "Authorization: Bearer <key>"
-	authHeader := r.Header.Get("Authorization")
-	keyString := strings.TrimPrefix(authHeader, "Bearer ")
-
+	keyString := bearerToken(r)
 	if keyString == "" {
 		http.Error(w, "Authorization header não encontrado", http.StatusUnauthorized)
 		return
@@ -51,9 +61,7 @@ func (a *App) validateKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Chave válida
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Chave válida"})
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Chave válida"})
 }
 
 // createKeyHandler cria uma nova chave de API
@@ -88,7 +96,6 @@ func (a *App) createKeyHandler(w http.ResponseWriter, r *http.Request) {
 		"INSERT INTO api_keys (name, key_hash) VALUES ($1, $2) RETURNING id",
 		req.Name, newKeyHash,
 	).Scan(&newID)
-
 	if err != nil {
 		log.Printf("Erro ao salvar a chave no banco: %v", err)
 		http.Error(w, "Erro ao salvar a chave", http.StatusInternalServerError)
@@ -96,8 +103,7 @@ func (a *App) createKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Nova chave criada com sucesso (ID: %d, Name: %s)", newID, req.Name)
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(CreateKeyResponse{
+	writeJSON(w, http.StatusCreated, CreateKeyResponse{
 		Name:    req.Name,
 		Key:     newKey, // Retorna a chave em texto plano pela última vez
 		Message: "Guarde esta chave com segurança! Você não poderá vê-la novamente.",
@@ -109,14 +115,13 @@ func (a *App) createKeyHandler(w http.ResponseWriter, r *http.Request) {
 // masterKeyAuthMiddleware protege endpoints que só podem ser acessados com a MASTER_KEY
 func (a *App) masterKeyAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		keyString := strings.TrimPrefix(authHeader, "Bearer ")
-
-		if keyString != a.MasterKey {
+		// Comparação em tempo constante: um "!=" comum termina no primeiro
+		// caractere diferente, e o tempo de resposta vazaria quantos
+		// caracteres iniciais o atacante já acertou (timing attack).
+		if subtle.ConstantTimeCompare([]byte(bearerToken(r)), []byte(a.MasterKey)) != 1 {
 			http.Error(w, "Acesso não autorizado", http.StatusForbidden)
 			return
 		}
-		// Se a chave for válida, continua para o handler principal
 		next.ServeHTTP(w, r)
 	})
 }

@@ -4,7 +4,7 @@ Este é o serviço de autenticação do projeto ToggleMaster. Ele é responsáve
 
 ## 📦 Pré-requisitos (Local)
 
-* [Go](https://go.dev/doc/install) (versão 1.21 ou superior)
+* [Go](https://go.dev/doc/install) (versão 1.27 ou superior)
 * [PostgreSQL](https://www.postgresql.org/download/) (rodando localmente ou em um contêiner Docker)
 
 ## 🚀 Rodando Localmente
@@ -89,3 +89,22 @@ curl http://localhost:8001/validate \
 ```
 
 Saída esperada: `Chave de API inválida ou inativa`
+## 🔁 CI/CD e DevSecOps (Fase 3)
+
+O deploy não é mais feito com `kubectl`: a pipeline publica a imagem no ECR e atualiza a versão no repositório [toggle-master-gitops](https://github.com/FIAP-PosTech-DevOps/toggle-master-gitops), e o ArgoCD de cada ambiente sincroniza. A pipeline é compartilhada pelos 5 serviços e fica em [toggle-master-infra](https://github.com/FIAP-PosTech-DevOps/toggle-master-infra/blob/main/docs/ci-cd.md).
+
+| Workflow | Quando roda | O que faz |
+|---|---|---|
+| `ci.yml` | PR para `release/*` ou `main` | build, testes, lint, SonarQube Cloud (SAST), Snyk ou Trivy (SCA) e scan da imagem com Trivy, sem publicar |
+| `ci.yml` | push em `release/vX.Y.Z` | o mesmo + imagem `vX.Y.Z-<sha>` no ECR + deploy em **develop** |
+| `release.yml` | botão (Actions → release → Run workflow) | `criar-release`, `promover-staging` (tag `-rc.N`) e `promover-producao` (tag final) |
+| `promote.yml` | push de tag `v*` | re-scan da imagem e deploy em **staging** (`-rc.N`) ou **production** (com aprovação) |
+
+Uma vulnerabilidade **crítica** (dependência ou imagem) ou o Quality Gate do Sonar reprovado interrompem a pipeline, e nada chega ao ECR.
+
+Para rodar localmente as mesmas verificações da pipeline:
+
+```bash
+go test -race -cover ./...          # testes unitários
+golangci-lint run                   # lint (mesma configuração da CI: .golangci.yml)
+```
